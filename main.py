@@ -75,6 +75,60 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ))
 
 
+async def set_temp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allows the mercenary to calibrate their personal thermal threshold."""
+    chat_id = str(update.message.chat_id)
+    
+    if chat_id not in mercenary_data:
+        await safe_request(lambda: update.message.reply_text("Error: No coordinates registered. Transmit your location first."))
+        return
+
+    try:
+        # Extract the number provided by the user (e.g., /set_temp 30.5)
+        new_threshold = float(context.args[0])
+        
+        mercenary_data[chat_id]['threshold'] = new_threshold
+            
+        await safe_request(lambda: update.message.reply_text(f"Threshold calibrated to **{new_threshold}°C**. Environmental parameters updated.", parse_mode='Markdown'))
+        
+    except (IndexError, ValueError):
+        await safe_request(lambda: update.message.reply_text("Invalid syntax. Usage: `/set_temp 30` or `/set_temp 28.5`", parse_mode='Markdown'))
+        return
+
+    lat = mercenary_data[chat_id]["lat"]
+    lon = mercenary_data[chat_id]["lon"]
+    url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric"
+
+    response = await safe_request(lambda: requests.get(url, timeout=10))
+    if response is not None:
+        if response.status_code == 200:
+            weather_data = response.json()
+            current_temp = weather_data['main']['temp']
+
+            if current_temp >= mercenary_data[chat_id]['threshold']:
+                message = (
+                    f"⚠️ **IMMEDIATE HAZARD DETECTED** ⚠️\n\n"
+                    f"The current temperature at your drop zone is already\n\n`{current_temp}°C.`\n\n"
+                    "Cooling parameters must be adjusted immediately prior to combat engagement."
+                )
+                await safe_request(lambda: update.message.reply_text(message, parse_mode='Markdown'))
+
+                # Log the alert to prevent the hourly queue from sending a duplicate today
+                mercenary_data[chat_id]["lower"] = False
+                with open(DATA_FILE, "w") as f:
+                    json.dump(mercenary_data, f, indent=4)
+            else:
+                mercenary_data[chat_id]["lower"] = True
+                with open(DATA_FILE, "w") as f:
+                    json.dump(mercenary_data, f, indent=4)
+                await safe_request(lambda: update.message.reply_text(f"Scan complete. Current temperature is\n\n`{current_temp}°C`\n\nEnvironment is within acceptable operational parameters."))
+        else:
+            logging.warning(f"Weather API returned anomalous status during initial scan: {response.status_code}")
+            
+    else:
+        await safe_request(lambda: update.message.reply_text("Error: Preliminary scan failed. Relying on hourly automated sweeps."))
+
+
 async def receive_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Processes transmitted coordinates and initiates an immediate threat assessment."""
     user_location = update.message.location
@@ -83,11 +137,13 @@ async def receive_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lat = user_location.latitude
     lon = user_location.longitude
 
-    # Register the mercenary's coordinates
+    current_threshold = mercenary_data.get(chat_id, {}).get('threshold', 25.0)
+
     mercenary_data[chat_id] = {
         'lat': lat,
         'lon': lon,
-        'last_alert_date': None
+        'lower': True,
+        'threshold': current_threshold
     }
 
     # Secure Data Storage
@@ -99,7 +155,6 @@ async def receive_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ))
 
     # --- Immediate Threat Assessment Protocol ---
-    today = datetime.now().date().isoformat()
     url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric"
 
     response = await safe_request(lambda: requests.get(url, timeout=10))
@@ -108,7 +163,7 @@ async def receive_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             weather_data = response.json()
             current_temp = weather_data['main']['temp']
 
-            if current_temp >= 25.0:
+            if current_temp >= mercenary_data[chat_id]['threshold']:
                 message = (
                     f"⚠️ **IMMEDIATE HAZARD DETECTED** ⚠️\n\n"
                     f"The current temperature at your drop zone is already\n\n`{current_temp}°C.`\n\n"
@@ -117,11 +172,14 @@ async def receive_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await safe_request(lambda: update.message.reply_text(message, parse_mode='Markdown'))
 
                 # Log the alert to prevent the hourly queue from sending a duplicate today
-                mercenary_data[chat_id]['last_alert_date'] = today
+                mercenary_data[chat_id]["lower"] = False
                 with open(DATA_FILE, "w") as f:
                     json.dump(mercenary_data, f, indent=4)
             else:
-                await safe_request(lambda: update.message.reply_text(f"Scan complete. Current temperature is {current_temp}°C. Environment is within acceptable operational parameters."))
+                mercenary_data[chat_id]["lower"] = True
+                with open(DATA_FILE, "w") as f:
+                    json.dump(mercenary_data, f, indent=4)
+                await safe_request(lambda: update.message.reply_text(f"Scan complete. Current temperature is\n\n`{current_temp}°C`\n\nEnvironment is within acceptable operational parameters."))
         else:
             logging.warning(f"Weather API returned anomalous status during initial scan: {response.status_code}")
             
@@ -134,12 +192,7 @@ async def receive_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def monitor_temperature(context: ContextTypes.DEFAULT_TYPE):
     """Scheduled routine to evaluate environmental threats."""
-    today = datetime.now().date().isoformat()
-
     for chat_id, data in mercenary_data.items():
-        if data['last_alert_date'] == today:
-            continue
-
         lat = data['lat']
         lon = data['lon']
 
@@ -154,7 +207,7 @@ async def monitor_temperature(context: ContextTypes.DEFAULT_TYPE):
                 weather_data = response.json()
                 current_temp = weather_data['main']['temp']
 
-                if current_temp >= 25.0:
+                if current_temp >= mercenary_data[chat_id]['threshold'] and mercenary_data[chat_id]["lower"]:
                     message = (
                         f"⚠️ **Environmental Hazard Warning** ⚠️\n\n"
                         f"The current temperature at your coordinates is\n\n`{current_temp}°C`\n\n"
@@ -162,10 +215,15 @@ async def monitor_temperature(context: ContextTypes.DEFAULT_TYPE):
                     )
                     await safe_request(lambda: context.bot.send_message(chat_id=chat_id, text=message, parse_mode='Markdown'))
 
-                    mercenary_data[chat_id]['last_alert_date'] = today
+                    mercenary_data[chat_id]['lower'] = False
                     
                     with open(DATA_FILE, "w") as f:
                         json.dump(mercenary_data, f, indent=4)
+                elif current_temp < mercenary_data[chat_id]['threshold'] and not mercenary_data[chat_id]["lower"]:
+                    mercenary_data[chat_id]["lower"] = True
+                    with open(DATA_FILE,DATA_FILE) as f:
+                        json.dump(mercenary_data, f, indent=4)
+                    await safe_request(lambda: context.bot.send_message(chat_id=chat_id, text=f"Scan complete. Current temperature is\n\n`{current_temp}°C`\n\nEnvironment is within acceptable operational parameters.", parse_mode='Markdown'))
             else:
                 logging.warning(f"API returned anomalous status: {response.status_code}")
 
@@ -177,6 +235,7 @@ def main():
 
     # Integrate communication handlers
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("set_temp", set_temp))
     application.add_handler(MessageHandler(filters.LOCATION, receive_location))
 
     # Schedule the climate monitoring protocol to execute every hour (3600 seconds)
