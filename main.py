@@ -121,7 +121,7 @@ async def set_temp(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 mercenary_data[chat_id]["lower"] = True
                 with open(DATA_FILE, "w") as f:
                     json.dump(mercenary_data, f, indent=4)
-                await safe_request(lambda: update.message.reply_text(f"Scan complete. Current temperature is\n\n`{current_temp}°C`\n\nEnvironment is within acceptable operational parameters."))
+                await safe_request(lambda: update.message.reply_text(f"Scan complete. Current temperature is\n\n`{current_temp}°C`\n\nEnvironment is within acceptable operational parameters.", parse_mode='Markdown'))
         else:
             logging.warning(f"Weather API returned anomalous status during initial scan: {response.status_code}")
             
@@ -179,7 +179,7 @@ async def receive_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 mercenary_data[chat_id]["lower"] = True
                 with open(DATA_FILE, "w") as f:
                     json.dump(mercenary_data, f, indent=4)
-                await safe_request(lambda: update.message.reply_text(f"Scan complete. Current temperature is\n\n`{current_temp}°C`\n\nEnvironment is within acceptable operational parameters."))
+                await safe_request(lambda: update.message.reply_text(f"Scan complete. Current temperature is\n\n`{current_temp}°C`\n\nEnvironment is within acceptable operational parameters.", parse_mode='Markdown'))
         else:
             logging.warning(f"Weather API returned anomalous status during initial scan: {response.status_code}")
             
@@ -221,7 +221,7 @@ async def monitor_temperature(context: ContextTypes.DEFAULT_TYPE):
                         json.dump(mercenary_data, f, indent=4)
                 elif current_temp < mercenary_data[chat_id]['threshold'] and not mercenary_data[chat_id]["lower"]:
                     mercenary_data[chat_id]["lower"] = True
-                    with open(DATA_FILE,DATA_FILE) as f:
+                    with open(DATA_FILE, "w") as f:
                         json.dump(mercenary_data, f, indent=4)
                     await safe_request(lambda: context.bot.send_message(chat_id=chat_id, text=f"Scan complete. Current temperature is\n\n`{current_temp}°C`\n\nEnvironment is within acceptable operational parameters.", parse_mode='Markdown'))
             else:
