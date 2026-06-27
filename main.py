@@ -39,11 +39,13 @@ if os.path.exists(DATA_FILE):
         logging.error(f"Unexpected error accessing memory core: {e}")
 
 
+_exceptionText = ""
 async def safe_request(do_request, max_attempts=10):
     """
     Executes a callable with a linear backoff retry protocol.
     Dynamically handles both synchronous HTTP requests and asynchronous Telegram commands.
     """
+    _exceptionText = ""
     attempt = 1
     while True:
         try:
@@ -58,6 +60,7 @@ async def safe_request(do_request, max_attempts=10):
             return result
             
         except Exception as e:
+            _exceptionText = str(e)
             if attempt >= max_attempts:
                 logging.error(f"Total failure after {max_attempts} attempts: {e}")
                 return None # Fail gracefully
@@ -224,6 +227,10 @@ async def monitor_temperature(context: ContextTypes.DEFAULT_TYPE):
                     with open(DATA_FILE, "w") as f:
                         json.dump(mercenary_data, f, indent=4)
                     await safe_request(lambda: context.bot.send_message(chat_id=chat_id, text=f"Scan complete. Current temperature is\n\n`{current_temp}°C`\n\nEnvironment is within acceptable operational parameters.", parse_mode='Markdown'))
+                if "Forbidden" in _exceptionText:
+                    del mercenary_data[chat_id]
+                    with open(DATA_FILE, "w") as f:
+                        json.dump(mercenary_data, f, indent=4)
             else:
                 logging.warning(f"API returned anomalous status: {response.status_code}")
 
@@ -240,7 +247,7 @@ def main():
 
     # Schedule the climate monitoring protocol to execute every hour (3600 seconds)
     job_queue = application.job_queue
-    job_queue.run_repeating(monitor_temperature, interval=3600, first=10)
+    job_queue.run_repeating(monitor_temperature, interval=900, first=10)
 
     # --- ASCII Boot Sequence ---
     startup_art = r"""
